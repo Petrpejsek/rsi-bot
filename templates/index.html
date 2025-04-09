@@ -14,6 +14,7 @@
         .table {
             background-color: white;
             box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            margin-bottom: 40px;
         }
         .table th {
             background-color: #f8f9fa;
@@ -25,14 +26,40 @@
             display: none;
             margin: 20px 0;
         }
+        .section-heading {
+            margin-top: 30px;
+            margin-bottom: 15px;
+            color: #333;
+            font-weight: 500;
+        }
+        .short-section {
+            border-left: 5px solid #dc3545;
+            padding-left: 15px;
+        }
+        .long-section {
+            border-left: 5px solid #198754;
+            padding-left: 15px;
+        }
+        .no-data {
+            padding: 20px;
+            text-align: center;
+            color: #6c757d;
+            font-style: italic;
+        }
+        .short-badge {
+            background-color: #dc3545;
+        }
+        .long-badge {
+            background-color: #198754;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1 class="text-center mb-4">Binance Futures RSI Scanner (1h)</h1>
-        <p class="text-center text-muted">Zobrazeny pouze páry s RSI >= 65</p>
         <div class="text-center refresh-button">
-            <button class="btn btn-success" onclick="refreshData()">Obnovit data</button>
+            <button class="btn btn-primary" onclick="refreshData()">Obnovit data</button>
+            <p class="text-muted mt-2">Poslední aktualizace: <span id="lastUpdate">-</span></p>
         </div>
         <div id="loading" class="text-center">
             <div class="spinner-border text-primary" role="status">
@@ -40,6 +67,11 @@
             </div>
             <p>Načítání dat... Může trvat několik minut.</p>
         </div>
+
+        <!-- SHORT SECTION -->
+        <h2 class="section-heading short-section">
+            <span class="badge short-badge">SHORT</span> RSI >= 65
+        </h2>
         <div class="table-responsive">
             <table class="table table-striped">
                 <thead>
@@ -49,9 +81,35 @@
                         <th>Cena</th>
                     </tr>
                 </thead>
-                <tbody id="oneHourData">
+                <tbody id="highRsiData">
+                    <!-- Data budou naplněna JavaScriptem -->
                 </tbody>
             </table>
+            <div id="noHighRsiData" class="no-data d-none">
+                Žádné páry s RSI >= 65 nebyly nalezeny
+            </div>
+        </div>
+
+        <!-- LONG SECTION -->
+        <h2 class="section-heading long-section">
+            <span class="badge long-badge">LONG</span> RSI <= 28
+        </h2>
+        <div class="table-responsive">
+            <table class="table table-striped">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>RSI</th>
+                        <th>Cena</th>
+                    </tr>
+                </thead>
+                <tbody id="lowRsiData">
+                    <!-- Data budou naplněna JavaScriptem -->
+                </tbody>
+            </table>
+            <div id="noLowRsiData" class="no-data d-none">
+                Žádné páry s RSI <= 28 nebyly nalezeny
+            </div>
         </div>
     </div>
 
@@ -64,21 +122,59 @@
             document.getElementById('loading').style.display = 'none';
         }
 
-        function updateTable(data) {
-            const oneHourBody = document.getElementById('oneHourData');
-            oneHourBody.innerHTML = '';
+        function updateLastUpdateTime() {
+            const now = new Date();
+            const formattedTime = now.toLocaleTimeString('cs-CZ', { 
+                hour: '2-digit', 
+                minute: '2-digit',
+                second: '2-digit' 
+            });
+            document.getElementById('lastUpdate').textContent = formattedTime;
+        }
 
-            if (data['1h']) {
-                data['1h'].forEach(item => {
+        function updateTables(data) {
+            // Aktualizace tabulky pro HIGH RSI (možný SHORT)
+            const highRsiBody = document.getElementById('highRsiData');
+            const noHighRsiData = document.getElementById('noHighRsiData');
+            highRsiBody.innerHTML = '';
+            
+            if (data.high_rsi && data.high_rsi.length > 0) {
+                data.high_rsi.forEach(item => {
                     const row = document.createElement('tr');
                     row.innerHTML = `
                         <td>${item.symbol}</td>
                         <td>${item.rsi}</td>
                         <td>${item.price}</td>
                     `;
-                    oneHourBody.appendChild(row);
+                    highRsiBody.appendChild(row);
                 });
+                noHighRsiData.classList.add('d-none');
+            } else {
+                noHighRsiData.classList.remove('d-none');
             }
+            
+            // Aktualizace tabulky pro LOW RSI (možný LONG)
+            const lowRsiBody = document.getElementById('lowRsiData');
+            const noLowRsiData = document.getElementById('noLowRsiData');
+            lowRsiBody.innerHTML = '';
+            
+            if (data.low_rsi && data.low_rsi.length > 0) {
+                data.low_rsi.forEach(item => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${item.symbol}</td>
+                        <td>${item.rsi}</td>
+                        <td>${item.price}</td>
+                    `;
+                    lowRsiBody.appendChild(row);
+                });
+                noLowRsiData.classList.add('d-none');
+            } else {
+                noLowRsiData.classList.remove('d-none');
+            }
+            
+            // Aktualizace času poslední aktualizace
+            updateLastUpdateTime();
         }
 
         function refreshData() {
@@ -86,7 +182,7 @@
             fetch('/get_rsi_data')
                 .then(response => response.json())
                 .then(data => {
-                    updateTable(data);
+                    updateTables(data);
                     hideLoading();
                 })
                 .catch(error => {
@@ -99,8 +195,8 @@
         // Načtení dat při startu
         refreshData();
 
-        // Automatické obnovení každých 5 minut
-        setInterval(refreshData, 300000);
+        // Automatické obnovení každou minutu
+        setInterval(refreshData, 60000);
     </script>
 </body>
 </html>

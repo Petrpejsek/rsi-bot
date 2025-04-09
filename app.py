@@ -84,7 +84,8 @@ def calculate_rsi(data, periods=14):
 def get_futures_data():
     try:
         logger.info("Začínám získávat futures data...")
-        results = []
+        high_rsi_results = []  # Pro RSI >= 65 (možný SHORT)
+        low_rsi_results = []   # Pro RSI <= 28 (možný LONG)
         processed = 0
         
         # Získání futures symbolů
@@ -119,9 +120,17 @@ def get_futures_data():
                 
                 current_price = float(df['close'].iloc[-1])
                 
-                if rsi >= 65:  # Filtrujeme pouze RSI >= 65
-                    logger.info(f"✓ Nalezen {symbol} s RSI {rsi:.2f}")
-                    results.append({
+                # Kontrola podmínek pro RSI
+                if rsi >= 65:  # Signál pro možný SHORT
+                    logger.info(f"✓ Nalezen {symbol} s RSI {rsi:.2f} (možný SHORT)")
+                    high_rsi_results.append({
+                        'symbol': symbol,
+                        'rsi': round(rsi, 2),
+                        'price': f"${current_price:.4f}"
+                    })
+                elif rsi <= 28:  # Signál pro možný LONG
+                    logger.info(f"✓ Nalezen {symbol} s RSI {rsi:.2f} (možný LONG)")
+                    low_rsi_results.append({
                         'symbol': symbol,
                         'rsi': round(rsi, 2),
                         'price': f"${current_price:.4f}"
@@ -135,12 +144,20 @@ def get_futures_data():
                 continue
         
         logger.info(f"Dokončeno zpracování všech {total_symbols} symbolů")
-        logger.info(f"Nalezeno {len(results)} symbolů s RSI >= 65")
+        logger.info(f"Nalezeno {len(high_rsi_results)} symbolů s RSI >= 65 (možný SHORT)")
+        logger.info(f"Nalezeno {len(low_rsi_results)} symbolů s RSI <= 28 (možný LONG)")
         
-        return sorted(results, key=lambda x: x['rsi'], reverse=True)
+        # Seřazení výsledků
+        high_rsi_sorted = sorted(high_rsi_results, key=lambda x: x['rsi'], reverse=True)
+        low_rsi_sorted = sorted(low_rsi_results, key=lambda x: x['rsi'])
+        
+        return {
+            'high_rsi': high_rsi_sorted,  # Pro SHORT
+            'low_rsi': low_rsi_sorted     # Pro LONG
+        }
     except Exception as e:
         logger.error(f"Hlavní chyba při získávání futures dat: {str(e)}")
-        return []
+        return {'high_rsi': [], 'low_rsi': []}
 
 @app.route('/')
 def index():
@@ -154,12 +171,14 @@ def get_rsi_data():
     try:
         results = get_futures_data()
         elapsed_time = time.time() - start_time
-        logger.info(f"Nalezeno {len(results)} párů s RSI >= 65 za {elapsed_time:.1f} sekund")
-        return jsonify({'1h': results})
+        high_count = len(results['high_rsi'])
+        low_count = len(results['low_rsi'])
+        logger.info(f"Nalezeno {high_count} párů s RSI >= 65 a {low_count} párů s RSI <= 28 za {elapsed_time:.1f} sekund")
+        return jsonify(results)
     except Exception as e:
         error_msg = f"Chyba při získávání dat: {str(e)}"
         logger.error(error_msg)
         return jsonify({"error": error_msg}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5002, debug=False) 
+    app.run(host='0.0.0.0', port=5002, debug=True) 
