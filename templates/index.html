@@ -60,7 +60,7 @@
         <div class="text-center refresh-button">
             <button class="btn btn-primary" onclick="refreshData()">Obnovit data</button>
             <button class="btn btn-secondary ms-2" onclick="loadTestData()">Testovací data</button>
-            <p class="text-muted mt-2">Poslední aktualizace: <span id="lastUpdate">-</span></p>
+            <p class="text-muted mt-2">Poslední aktualizace: <span id="lastUpdate">-</span> (UTC)</p>
         </div>
         <div id="loading" class="text-center">
             <div class="spinner-border text-primary" role="status">
@@ -210,7 +210,8 @@
         function refreshData() {
             showLoading();
             console.log("Začínám načítat data z API...");
-            fetch('/get_rsi_data')
+            // Přidáme náhodný parametr k URL, aby browser nepoužil cache
+            fetch('/get_rsi_data?t=' + new Date().getTime())
                 .then(response => {
                     console.log("Odpověď z API:", response);
                     if (!response.ok) {
@@ -232,7 +233,7 @@
                 .catch(error => {
                     console.error('Error:', error);
                     hideLoading();
-                    alert('Chyba při načítání dat: ' + error.message);
+                    alert('Chyba při načítání dat: ' + error.message + '\nZkuste to znovu za chvíli.');
                 });
         }
 
