@@ -92,6 +92,7 @@ def calculate_rsi(data, periods=14):
 def get_futures_data():
     try:
         logger.info("Začínám získávat futures data...")
+        global results_cache
         high_rsi_results = []  # Pro RSI >= 65 (možný SHORT)
         low_rsi_results = []   # Pro RSI <= 28 (možný LONG)
         processed = 0
@@ -154,7 +155,6 @@ def get_futures_data():
                     low_rsi_sorted = sorted(low_rsi_results, key=lambda x: x['rsi'])
                     
                     # Aktualizace globální cache
-                    global results_cache
                     results_cache['high_rsi'] = high_rsi_sorted
                     results_cache['low_rsi'] = low_rsi_sorted
                     results_cache['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -176,7 +176,6 @@ def get_futures_data():
         high_rsi_sorted = sorted(high_rsi_results, key=lambda x: x['rsi'], reverse=True)
         low_rsi_sorted = sorted(low_rsi_results, key=lambda x: x['rsi'])
         
-        global results_cache
         results_cache['high_rsi'] = high_rsi_sorted
         results_cache['low_rsi'] = low_rsi_sorted
         results_cache['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -191,6 +190,7 @@ def get_futures_data():
 
 # Funkce pro spuštění na pozadí
 def background_update():
+    global results_cache  # Přidáno - globální proměnná musí být deklarována před použitím
     while True:
         try:
             logger.info("Spouštím aktualizaci dat na pozadí")
