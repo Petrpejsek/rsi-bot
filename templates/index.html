@@ -59,6 +59,7 @@
         <h1 class="text-center mb-4">Binance Futures RSI Scanner (1h)</h1>
         <div class="text-center refresh-button">
             <button class="btn btn-primary" onclick="refreshData()">Obnovit data</button>
+            <button class="btn btn-secondary ms-2" onclick="loadTestData()">Testovací data</button>
             <p class="text-muted mt-2">Poslední aktualizace: <span id="lastUpdate">-</span></p>
             <p class="text-muted mt-1"><small>Omezeno na top 100 USDT párů pro rychlejší zpracování</small></p>
         </div>
@@ -199,6 +200,26 @@
                     console.error('Error:', error);
                     hideLoading();
                     alert('Chyba při načítání dat. Zkuste to prosím znovu.');
+                });
+        }
+
+        function loadTestData() {
+            showLoading();
+            console.log("Načítám testovací data...");
+            fetch('/test_data')
+                .then(response => {
+                    console.log("Odpověď z API (test):", response);
+                    return response.json();
+                })
+                .then(data => {
+                    console.log("Získaná testovací data:", data);
+                    updateTables(data);
+                    hideLoading();
+                })
+                .catch(error => {
+                    console.error('Error při načítání testovacích dat:', error);
+                    hideLoading();
+                    alert('Chyba při načítání testovacích dat.');
                 });
         }
 
