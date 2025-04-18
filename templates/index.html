@@ -61,7 +61,6 @@
             <button class="btn btn-primary" onclick="refreshData()">Obnovit data</button>
             <button class="btn btn-secondary ms-2" onclick="loadTestData()">Testovací data</button>
             <p class="text-muted mt-2">Poslední aktualizace: <span id="lastUpdate">-</span></p>
-            <p class="text-muted mt-1"><small>Omezeno na top 100 USDT párů pro rychlejší zpracování</small></p>
         </div>
         <div id="loading" class="text-center">
             <div class="spinner-border text-primary" role="status">
@@ -177,7 +176,9 @@
             
             // Aktualizace času poslední aktualizace
             if (data.last_update) {
-                document.getElementById('lastUpdate').textContent = data.last_update;
+                // Převod na lokální formát času
+                const lastUpdate = data.last_update.substr(11); // získáme jen část času (HH:MM:SS)
+                document.getElementById('lastUpdate').textContent = lastUpdate;
             } else {
                 updateLastUpdateTime();
             }

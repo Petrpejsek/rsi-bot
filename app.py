@@ -92,7 +92,7 @@ def calculate_rsi(data, periods=14):
 def get_futures_data():
     try:
         logger.info("Začínám získávat futures data...")
-        global results_cache
+        global results_cache  # Přidáno - globální proměnná musí být deklarována před použitím
         high_rsi_results = []  # Pro RSI >= 65 (možný SHORT)
         low_rsi_results = []   # Pro RSI <= 28 (možný LONG)
         processed = 0
@@ -103,70 +103,81 @@ def get_futures_data():
         symbols = [s['symbol'] for s in futures_exchange_info['symbols'] 
                   if s['status'] == 'TRADING' and s['contractType'] == 'PERPETUAL' and s['symbol'].endswith('USDT')]
         
-        # Omezení pouze na USDT páry a maximálně 100 symbolů pro dodržení časového limitu
-        symbols = [s for s in symbols if 'USDT' in s][:100]
+        # Používáme všechny USDT páry - bez omezení
+        symbols = [s for s in symbols if 'USDT' in s]
         
         total_symbols = len(symbols)
         logger.info(f"Nalezeno {total_symbols} futures párů ke zpracování")
         
-        for symbol in symbols:
-            try:
-                processed += 1
-                logger.info(f"Zpracovávám {symbol} ({processed}/{total_symbols})")
-                
-                # Získání dat
-                klines = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_1HOUR, limit=100)
-                if not klines:
-                    logger.warning(f"Žádná data pro {symbol}")
-                    continue
-                
-                # Zpracování dat
-                df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_av', 'trades', 'tb_base_av', 'tb_quote_av', 'ignore'])
-                df['close'] = pd.to_numeric(df['close'])
-                
-                # Výpočet RSI
-                rsi = calculate_rsi(df)
-                if rsi is None:
-                    logger.warning(f"Nelze vypočítat RSI pro {symbol}")
-                    continue
-                
-                current_price = float(df['close'].iloc[-1])
-                
-                # Kontrola podmínek pro RSI
-                if rsi >= 65:  # Signál pro možný SHORT
-                    logger.info(f"✓ Nalezen {symbol} s RSI {rsi:.2f} (možný SHORT)")
-                    high_rsi_results.append({
-                        'symbol': symbol,
-                        'rsi': round(rsi, 2),
-                        'price': f"${current_price:.4f}"
-                    })
-                elif rsi <= 28:  # Signál pro možný LONG
-                    logger.info(f"✓ Nalezen {symbol} s RSI {rsi:.2f} (možný LONG)")
-                    low_rsi_results.append({
-                        'symbol': symbol,
-                        'rsi': round(rsi, 2),
-                        'price': f"${current_price:.4f}"
-                    })
-                
-                # Aktualizace cache po každých 10 zpracovaných párech
-                if processed % 10 == 0:
-                    # Seřazení výsledků
-                    high_rsi_sorted = sorted(high_rsi_results, key=lambda x: x['rsi'], reverse=True)
-                    low_rsi_sorted = sorted(low_rsi_results, key=lambda x: x['rsi'])
+        # Rozdělíme páry do skupin po 20, abychom je mohli zpracovávat postupně
+        # a aktualizovat cache po každé skupině
+        symbol_batches = [symbols[i:i+20] for i in range(0, len(symbols), 20)]
+        batch_num = 0
+        
+        for batch in symbol_batches:
+            batch_num += 1
+            logger.info(f"Zpracovávám skupinu {batch_num}/{len(symbol_batches)} ({len(batch)} párů)")
+            
+            for symbol in batch:
+                try:
+                    processed += 1
+                    logger.info(f"Zpracovávám {symbol} ({processed}/{total_symbols})")
                     
-                    # Aktualizace globální cache
-                    results_cache['high_rsi'] = high_rsi_sorted
-                    results_cache['low_rsi'] = low_rsi_sorted
-                    results_cache['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    # Získání dat
+                    klines = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_1HOUR, limit=50)
+                    if not klines:
+                        logger.warning(f"Žádná data pro {symbol}")
+                        continue
                     
-                    logger.info(f"Cache aktualizována po zpracování {processed} párů")
-                
-                # Kratší pauza mezi API calls
-                time.sleep(0.02)  # Zkrátíme pauzu z 0.05 na 0.02
-                
-            except Exception as e:
-                logger.error(f"Chyba při zpracování {symbol}: {str(e)}")
-                continue
+                    # Zpracování dat
+                    df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_av', 'trades', 'tb_base_av', 'tb_quote_av', 'ignore'])
+                    df['close'] = pd.to_numeric(df['close'])
+                    
+                    # Výpočet RSI
+                    rsi = calculate_rsi(df)
+                    if rsi is None:
+                        logger.warning(f"Nelze vypočítat RSI pro {symbol}")
+                        continue
+                    
+                    current_price = float(df['close'].iloc[-1])
+                    
+                    # Kontrola podmínek pro RSI
+                    if rsi >= 65:  # Signál pro možný SHORT
+                        logger.info(f"✓ Nalezen {symbol} s RSI {rsi:.2f} (možný SHORT)")
+                        high_rsi_results.append({
+                            'symbol': symbol,
+                            'rsi': round(rsi, 2),
+                            'price': f"${current_price:.4f}"
+                        })
+                    elif rsi <= 28:  # Signál pro možný LONG
+                        logger.info(f"✓ Nalezen {symbol} s RSI {rsi:.2f} (možný LONG)")
+                        low_rsi_results.append({
+                            'symbol': symbol,
+                            'rsi': round(rsi, 2),
+                            'price': f"${current_price:.4f}"
+                        })
+                    
+                    # Kratší pauza mezi API calls
+                    time.sleep(0.02)  # Zkrátíme pauzu z 0.05 na 0.02
+                    
+                except Exception as e:
+                    logger.error(f"Chyba při zpracování {symbol}: {str(e)}")
+                    continue
+            
+            # Aktualizace cache po každé dokončené skupině párů
+            # Seřazení výsledků
+            high_rsi_sorted = sorted(high_rsi_results, key=lambda x: x['rsi'], reverse=True)
+            low_rsi_sorted = sorted(low_rsi_results, key=lambda x: x['rsi'])
+            
+            # Aktualizace globální cache
+            results_cache['high_rsi'] = high_rsi_sorted
+            results_cache['low_rsi'] = low_rsi_sorted
+            results_cache['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            logger.info(f"Cache aktualizována po zpracování skupiny {batch_num}/{len(symbol_batches)} (celkem {processed}/{total_symbols} párů)")
+            
+            # Krátká pauza mezi skupinami, aby Railway neukončil proces
+            time.sleep(1)
         
         logger.info(f"Dokončeno zpracování všech {total_symbols} symbolů")
         logger.info(f"Nalezeno {len(high_rsi_results)} symbolů s RSI >= 65 (možný SHORT)")
