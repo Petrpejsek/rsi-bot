@@ -134,13 +134,22 @@
         }
 
         function updateTables(data) {
+            console.log("Začínám aktualizovat tabulky s daty:", data);
             // Aktualizace tabulky pro HIGH RSI (možný SHORT)
             const highRsiBody = document.getElementById('highRsiData');
             const noHighRsiData = document.getElementById('noHighRsiData');
+            
+            if (!highRsiBody) {
+                console.error("Element highRsiData nebyl nalezen!");
+                return;
+            }
+            
             highRsiBody.innerHTML = '';
             
-            if (data.high_rsi && data.high_rsi.length > 0) {
+            if (data && data.high_rsi && data.high_rsi.length > 0) {
+                console.log("Mám " + data.high_rsi.length + " HIGH RSI položek k zobrazení");
                 data.high_rsi.forEach(item => {
+                    console.log("Přidávám HIGH RSI položku:", item);
                     const row = document.createElement('tr');
                     row.innerHTML = `
                         <td>${item.symbol}</td>
@@ -149,18 +158,27 @@
                     `;
                     highRsiBody.appendChild(row);
                 });
-                noHighRsiData.classList.add('d-none');
+                if (noHighRsiData) noHighRsiData.classList.add('d-none');
             } else {
-                noHighRsiData.classList.remove('d-none');
+                console.log("Žádná HIGH RSI data k zobrazení");
+                if (noHighRsiData) noHighRsiData.classList.remove('d-none');
             }
             
             // Aktualizace tabulky pro LOW RSI (možný LONG)
             const lowRsiBody = document.getElementById('lowRsiData');
             const noLowRsiData = document.getElementById('noLowRsiData');
+            
+            if (!lowRsiBody) {
+                console.error("Element lowRsiData nebyl nalezen!");
+                return;
+            }
+            
             lowRsiBody.innerHTML = '';
             
-            if (data.low_rsi && data.low_rsi.length > 0) {
+            if (data && data.low_rsi && data.low_rsi.length > 0) {
+                console.log("Mám " + data.low_rsi.length + " LOW RSI položek k zobrazení");
                 data.low_rsi.forEach(item => {
+                    console.log("Přidávám LOW RSI položku:", item);
                     const row = document.createElement('tr');
                     row.innerHTML = `
                         <td>${item.symbol}</td>
@@ -169,19 +187,24 @@
                     `;
                     lowRsiBody.appendChild(row);
                 });
-                noLowRsiData.classList.add('d-none');
+                if (noLowRsiData) noLowRsiData.classList.add('d-none');
             } else {
-                noLowRsiData.classList.remove('d-none');
+                console.log("Žádná LOW RSI data k zobrazení");
+                if (noLowRsiData) noLowRsiData.classList.remove('d-none');
             }
             
             // Aktualizace času poslední aktualizace
-            if (data.last_update) {
+            if (data && data.last_update) {
+                console.log("Aktualizuji čas poslední aktualizace na:", data.last_update);
                 // Převod na lokální formát času
                 const lastUpdate = data.last_update.substr(11); // získáme jen část času (HH:MM:SS)
                 document.getElementById('lastUpdate').textContent = lastUpdate;
             } else {
+                console.log("Žádný čas poslední aktualizace, používám aktuální čas");
                 updateLastUpdateTime();
             }
+            
+            console.log("Aktualizace tabulek dokončena");
         }
 
         function refreshData() {
@@ -190,17 +213,26 @@
             fetch('/get_rsi_data')
                 .then(response => {
                     console.log("Odpověď z API:", response);
+                    if (!response.ok) {
+                        throw new Error('Problém s odpovědí API: ' + response.status);
+                    }
                     return response.json();
                 })
                 .then(data => {
                     console.log("Získaná data:", data);
+                    // Kontrola dat
+                    if (!data) {
+                        throw new Error('Žádná data nebyla přijata');
+                    }
+                    console.log("High RSI data délka:", data.high_rsi ? data.high_rsi.length : 0);
+                    console.log("Low RSI data délka:", data.low_rsi ? data.low_rsi.length : 0);
                     updateTables(data);
                     hideLoading();
                 })
                 .catch(error => {
                     console.error('Error:', error);
                     hideLoading();
-                    alert('Chyba při načítání dat. Zkuste to prosím znovu.');
+                    alert('Chyba při načítání dat: ' + error.message);
                 });
         }
 
