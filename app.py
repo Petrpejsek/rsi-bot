@@ -30,7 +30,7 @@ api_key = os.getenv('BINANCE_API_KEY')
 api_secret = os.getenv('BINANCE_API_SECRET')
 
 if not api_key or not api_secret:
-    logger.error("API klíče nejsou nastaveny v .env souboru!")
+    logger.error("API klíče nejsou nastaveny v proměnných prostředí!")
     sys.exit(1)
 
 logger.info("API klíče načteny úspěšně")
