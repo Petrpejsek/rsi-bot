@@ -104,7 +104,7 @@ def get_futures_data():
     try:
         logger.info("Začínám získávat futures data...")
         global results_cache  # Přidáno - globální proměnná musí být deklarována před použitím
-        high_rsi_results = []  # Pro RSI >= 65 (možný SHORT)
+        high_rsi_results = []  # Pro RSI >= 55 (možný SHORT)
         low_rsi_results = []   # Pro RSI <= 28 (možný LONG)
         processed = 0
         
@@ -153,7 +153,7 @@ def get_futures_data():
                     current_price = float(df['close'].iloc[-1])
                     
                     # Kontrola podmínek pro RSI
-                    if rsi >= 65:  # Signál pro možný SHORT
+                    if rsi >= 55:  # Signál pro možný SHORT
                         logger.info(f"✓ Nalezen {symbol} s RSI {rsi:.2f} (možný SHORT)")
                         high_rsi_results.append({
                             'symbol': symbol,
@@ -191,7 +191,7 @@ def get_futures_data():
             time.sleep(1)
         
         logger.info(f"Dokončeno zpracování všech {total_symbols} symbolů")
-        logger.info(f"Nalezeno {len(high_rsi_results)} symbolů s RSI >= 65 (možný SHORT)")
+        logger.info(f"Nalezeno {len(high_rsi_results)} symbolů s RSI >= 55 (možný SHORT)")
         logger.info(f"Nalezeno {len(low_rsi_results)} symbolů s RSI <= 28 (možný LONG)")
         
         # Finální aktualizace cache
