@@ -134,37 +134,55 @@ def get_futures_data():
                     processed += 1
                     logger.info(f"Zpracovávám {symbol} ({processed}/{total_symbols})")
                     
-                    # Získání dat
-                    klines = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_1HOUR, limit=50)
-                    if not klines:
-                        logger.warning(f"Žádná data pro {symbol}")
+                    # Získání dat - 1h timeframe
+                    klines_1h = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_1HOUR, limit=50)
+                    if not klines_1h:
+                        logger.warning(f"Žádná 1h data pro {symbol}")
                         continue
                     
-                    # Zpracování dat
-                    df = pd.DataFrame(klines, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_av', 'trades', 'tb_base_av', 'tb_quote_av', 'ignore'])
-                    df['close'] = pd.to_numeric(df['close'])
-                    
-                    # Výpočet RSI
-                    rsi = calculate_rsi(df)
-                    if rsi is None:
-                        logger.warning(f"Nelze vypočítat RSI pro {symbol}")
+                    # Získání dat - 15m timeframe
+                    klines_15m = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_15MINUTE, limit=50)
+                    if not klines_15m:
+                        logger.warning(f"Žádná 15m data pro {symbol}")
                         continue
                     
-                    current_price = float(df['close'].iloc[-1])
+                    # Zpracování dat - 1h
+                    df_1h = pd.DataFrame(klines_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_av', 'trades', 'tb_base_av', 'tb_quote_av', 'ignore'])
+                    df_1h['close'] = pd.to_numeric(df_1h['close'])
                     
-                    # Kontrola podmínek pro RSI
-                    if rsi >= 55:  # Signál pro možný SHORT
-                        logger.info(f"✓ Nalezen {symbol} s RSI {rsi:.2f} (možný SHORT)")
+                    # Zpracování dat - 15m
+                    df_15m = pd.DataFrame(klines_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_av', 'trades', 'tb_base_av', 'tb_quote_av', 'ignore'])
+                    df_15m['close'] = pd.to_numeric(df_15m['close'])
+                    
+                    # Výpočet RSI - 1h
+                    rsi_1h = calculate_rsi(df_1h)
+                    if rsi_1h is None:
+                        logger.warning(f"Nelze vypočítat 1h RSI pro {symbol}")
+                        continue
+                    
+                    # Výpočet RSI - 15m
+                    rsi_15m = calculate_rsi(df_15m)
+                    if rsi_15m is None:
+                        logger.warning(f"Nelze vypočítat 15m RSI pro {symbol}")
+                        rsi_15m = 0  # Nastavíme na 0, abychom mohli pokračovat
+                    
+                    current_price = float(df_1h['close'].iloc[-1])
+                    
+                    # Kontrola podmínek pro RSI (pouze podle 1h timeframe)
+                    if rsi_1h >= 55:  # Signál pro možný SHORT
+                        logger.info(f"✓ Nalezen {symbol} s RSI 1h {rsi_1h:.2f}, 15m {rsi_15m:.2f} (možný SHORT)")
                         high_rsi_results.append({
                             'symbol': symbol,
-                            'rsi': round(rsi, 2),
+                            'rsi': round(rsi_1h, 2),
+                            'rsi_15m': round(rsi_15m, 2),
                             'price': f"${current_price:.4f}"
                         })
-                    elif rsi <= 28:  # Signál pro možný LONG
-                        logger.info(f"✓ Nalezen {symbol} s RSI {rsi:.2f} (možný LONG)")
+                    elif rsi_1h <= 28:  # Signál pro možný LONG
+                        logger.info(f"✓ Nalezen {symbol} s RSI 1h {rsi_1h:.2f}, 15m {rsi_15m:.2f} (možný LONG)")
                         low_rsi_results.append({
                             'symbol': symbol,
-                            'rsi': round(rsi, 2),
+                            'rsi': round(rsi_1h, 2),
+                            'rsi_15m': round(rsi_15m, 2),
                             'price': f"${current_price:.4f}"
                         })
                     
@@ -257,13 +275,13 @@ def test_data():
     # Vrátíme statická testovací data
     test_data = {
         'high_rsi': [
-            {'symbol': 'BTCUSDT', 'rsi': 75.25, 'price': '$65,432.10'},
-            {'symbol': 'ETHUSDT', 'rsi': 72.18, 'price': '$3,245.67'},
-            {'symbol': 'ADAUSDT', 'rsi': 68.42, 'price': '$0.5678'}
+            {'symbol': 'BTCUSDT', 'rsi': 75.25, 'rsi_15m': 68.42, 'price': '$65,432.10'},
+            {'symbol': 'ETHUSDT', 'rsi': 72.18, 'rsi_15m': 55.67, 'price': '$3,245.67'},
+            {'symbol': 'ADAUSDT', 'rsi': 68.42, 'rsi_15m': 62.33, 'price': '$0.5678'}
         ],
         'low_rsi': [
-            {'symbol': 'XRPUSDT', 'rsi': 26.75, 'price': '$0.4321'},
-            {'symbol': 'DOGEUSDT', 'rsi': 22.33, 'price': '$0.1234'}
+            {'symbol': 'XRPUSDT', 'rsi': 26.75, 'rsi_15m': 31.48, 'price': '$0.4321'},
+            {'symbol': 'DOGEUSDT', 'rsi': 22.33, 'rsi_15m': 24.72, 'price': '$0.1234'}
         ],
         'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }

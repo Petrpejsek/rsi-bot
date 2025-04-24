@@ -78,7 +78,8 @@
                 <thead>
                     <tr>
                         <th>Symbol</th>
-                        <th>RSI</th>
+                        <th>RSI (1h)</th>
+                        <th>RSI (15m)</th>
                         <th>Cena</th>
                     </tr>
                 </thead>
@@ -100,7 +101,8 @@
                 <thead>
                     <tr>
                         <th>Symbol</th>
-                        <th>RSI</th>
+                        <th>RSI (1h)</th>
+                        <th>RSI (15m)</th>
                         <th>Cena</th>
                     </tr>
                 </thead>
@@ -154,6 +156,7 @@
                     row.innerHTML = `
                         <td>${item.symbol}</td>
                         <td>${item.rsi}</td>
+                        <td>${item.rsi_15m || '-'}</td>
                         <td>${item.price}</td>
                     `;
                     highRsiBody.appendChild(row);
@@ -183,6 +186,7 @@
                     row.innerHTML = `
                         <td>${item.symbol}</td>
                         <td>${item.rsi}</td>
+                        <td>${item.rsi_15m || '-'}</td>
                         <td>${item.price}</td>
                     `;
                     lowRsiBody.appendChild(row);
