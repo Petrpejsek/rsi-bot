@@ -11,6 +11,8 @@ import time
 import threading
 import signal
 import atexit
+import functools
+import requests
 
 # Nastavení logování
 logging.basicConfig(
@@ -50,21 +52,29 @@ results_cache = {
 api_key = os.getenv('BINANCE_API_KEY')
 api_secret = os.getenv('BINANCE_API_SECRET')
 
-if not api_key or not api_secret:
-    logger.error("API klíče nejsou nastaveny v proměnných prostředí!")
-    sys.exit(1)
-
-logger.info("API klíče načteny úspěšně")
-
-# Inicializace Binance klienta
+# Inicializace Binance klienta - podporuje i provoz bez API klíčů
 try:
-    client = Client(api_key, api_secret)
+    # Pokud jsou k dispozici API klíče, použijeme je
+    if api_key and api_secret:
+        client = Client(api_key, api_secret)
+        logger.info("API klíče načteny úspěšně, používám autentizované API")
+    else:
+        # Pro veřejné API nepotřebujeme klíče
+        client = Client("", "")
+        logger.info("Používám veřejné Binance API bez autentizace")
+    
+    # Modifikujeme timeout pro zvýšení stability
+    client.session.request = functools.partial(client.session.request, timeout=30)
+    
     # Test připojení
     client.get_system_status()
     logger.info("Připojení k Binance API úspěšné")
 except Exception as e:
     logger.error(f"Chyba při připojení k Binance API: {str(e)}")
-    sys.exit(1)
+    # I v případě selhání budeme pokračovat a zkusíme to znovu později
+    client = Client("", "")
+    client.session.request = functools.partial(client.session.request, timeout=30)
+    logger.warning("Nouzová inicializace Binance klienta bez autentizace po selhání")
 
 # Proměnná pro sledování běžícího stavu
 running = True
@@ -124,6 +134,170 @@ def calculate_rsi(data, periods=14):
         logger.error(f"Chyba při výpočtu RSI: {str(e)}")
         return None
 
+# Funkce pro získání dat z Binance s mnohem robustnější implementací opakovaných pokusů
+def get_futures_data_with_retry(symbol, interval, max_retries=7, initial_delay=1):
+    """
+    Získá data z Binance s opakovanými pokusy v případě selhání.
+    
+    Args:
+        symbol: Symbol, pro který chceme data
+        interval: Časový interval (např. "1h", "15m")
+        max_retries: Maximální počet pokusů
+        initial_delay: Počáteční zpoždění mezi pokusy v sekundách
+    
+    Returns:
+        List s daty nebo None v případě selhání
+    """
+    delay = initial_delay
+    
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                logger.info(f"Pokus {attempt+1}/{max_retries} o získání {interval} dat pro {symbol}")
+            
+            if attempt >= 2:
+                # Po dvou selhaných pokusech se pokusíme reinicializovat klienta
+                client.session = requests.Session()
+                client.session.request = functools.partial(client.session.request, timeout=30)
+                logger.info(f"Reinicializuji klienta před pokusem {attempt+1}")
+            
+            klines = client.futures_klines(symbol=symbol, interval=interval, limit=50)
+            
+            # Ověření, že data mají správný formát
+            if not klines or not isinstance(klines, list) or len(klines) < 2:
+                logger.warning(f"Získaná data pro {symbol} - {interval} jsou neplatná nebo prázdná")
+                if attempt < max_retries - 1:
+                    time.sleep(delay * (2 ** attempt))
+                    continue
+                else:
+                    return None
+                    
+            return klines
+            
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Chyba při získávání {interval} dat pro {symbol}: {error_msg}")
+            
+            if "IP banned" in error_msg:
+                logger.error(f"IP adresa byla dočasně zablokována Binance API. Čekám 5 minut: {error_msg}")
+                time.sleep(300)  # Čekáme 5 minut při IP banned
+            elif "429" in error_msg or "too many requests" in error_msg.lower(): 
+                # Rate limit - exponenciální backoff
+                wait_time = delay * (2 ** attempt)
+                logger.warning(f"Rate limit dosažen, čekám {wait_time} sekund: {error_msg}")
+                time.sleep(wait_time)
+            elif "Connection" in error_msg or "Timeout" in error_msg or "timeout" in error_msg.lower():
+                # Síťové problémy - zkusíme to znovu s delším timeoutem
+                wait_time = delay * (2 ** attempt)
+                logger.warning(f"Síťový problém při získávání dat, čekám {wait_time} sekund: {error_msg}")
+                time.sleep(wait_time)
+            elif attempt < max_retries - 1:
+                # Běžná chyba, zkusíme znovu
+                wait_time = delay * (2 ** attempt)
+                logger.warning(f"Pokus {attempt+1} o získání {interval} dat pro {symbol} selhal: {error_msg}. Zkouším znovu za {wait_time}s")
+                time.sleep(wait_time)
+            else:
+                # Poslední pokus selhal
+                logger.error(f"Všechny pokusy o získání {interval} dat pro {symbol} selhaly: {error_msg}")
+                return None
+    
+    return None
+
+# Funkce pro získání seznamu futures symbolů s opakovanými pokusy
+def get_futures_symbols_with_retry(max_retries=7, initial_delay=1):
+    """
+    Získá seznam futures symbolů s opakovanými pokusy v případě selhání.
+    
+    Args:
+        max_retries: Maximální počet pokusů
+        initial_delay: Počáteční zpoždění mezi pokusy v sekundách
+    
+    Returns:
+        List se symboly nebo prázdný list v případě selhání
+    """
+    delay = initial_delay
+    
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                logger.info(f"Pokus {attempt+1}/{max_retries} o získání seznamu futures symbolů")
+            
+            if attempt >= 2:
+                # Po dvou selhaných pokusech se pokusíme reinicializovat klienta
+                client.session = requests.Session()
+                client.session.request = functools.partial(client.session.request, timeout=30)
+                logger.info(f"Reinicializuji klienta před pokusem {attempt+1} pro futures symboly")
+            
+            futures_exchange_info = client.futures_exchange_info()
+            
+            # Filtrování symbolů
+            if not futures_exchange_info or not isinstance(futures_exchange_info, dict) or 'symbols' not in futures_exchange_info:
+                logger.warning(f"Získaná data pro futures_exchange_info jsou neplatná nebo prázdná")
+                if attempt < max_retries - 1:
+                    time.sleep(delay * (2 ** attempt))
+                    continue
+                else:
+                    return []
+            
+            symbols = [s['symbol'] for s in futures_exchange_info['symbols'] 
+                      if s['status'] == 'TRADING' and s['contractType'] == 'PERPETUAL' and s['symbol'].endswith('USDT')]
+            
+            if not symbols:
+                logger.warning("Nepodařilo se najít žádné vhodné futures symboly")
+                if attempt < max_retries - 1:
+                    logger.info("Zkusím to znovu s jiným přístupem...")
+                    # Alternativní přístup - získat všechny USDT páry
+                    try:
+                        all_tickers = client.futures_ticker()
+                        symbols = [t['symbol'] for t in all_tickers if 'USDT' in t['symbol']]
+                        if symbols:
+                            logger.info(f"Úspěšně načteno {len(symbols)} futures symbolů alternativní metodou")
+                            return symbols
+                    except Exception as e:
+                        logger.error(f"Alternativní metoda také selhala: {str(e)}")
+                    
+                    time.sleep(delay * (2 ** attempt))
+                    continue
+                else:
+                    return []
+            
+            logger.info(f"Úspěšně načteno {len(symbols)} futures symbolů")
+            return symbols
+            
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Chyba při získávání seznamu futures symbolů: {error_msg}")
+            
+            if "IP banned" in error_msg:
+                logger.error(f"IP adresa byla dočasně zablokována Binance API. Čekám 5 minut: {error_msg}")
+                time.sleep(300)  # Čekáme 5 minut při IP banned
+            elif "429" in error_msg or "too many requests" in error_msg.lower(): 
+                # Rate limit - exponenciální backoff
+                wait_time = delay * (2 ** attempt)
+                logger.warning(f"Rate limit dosažen, čekám {wait_time} sekund: {error_msg}")
+                time.sleep(wait_time)
+            elif "Connection" in error_msg or "Timeout" in error_msg or "timeout" in error_msg.lower():
+                # Síťové problémy - zkusíme to znovu s delším timeoutem
+                wait_time = delay * (2 ** attempt)
+                logger.warning(f"Síťový problém při získávání futures symbolů, čekám {wait_time} sekund: {error_msg}")
+                time.sleep(wait_time)
+            elif attempt < max_retries - 1:
+                # Běžná chyba, zkusíme znovu
+                wait_time = delay * (2 ** attempt)
+                logger.warning(f"Pokus {attempt+1} o získání seznamu futures symbolů selhal: {error_msg}. Zkouším znovu za {wait_time}s")
+                time.sleep(wait_time)
+            else:
+                # Poslední pokus selhal, zkusíme alternativní přístup
+                logger.error(f"Všechny pokusy o získání seznamu futures symbolů selhaly: {error_msg}")
+                
+                # Záchranný mechanismus - zkusíme získat nejběžnější páry ručně
+                logger.info("Používám záložní seznam základních párů")
+                return ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "MATICUSDT", "AVAXUSDT", "DOTUSDT"]
+    
+    # Pokud jsme došli sem, všechny pokusy selhaly
+    logger.error("Nepodařilo se získat futures symboly žádným způsobem")
+    return ["BTCUSDT", "ETHUSDT"]  # Vrátíme alespoň základní páry
+
 def get_futures_data():
     try:
         logger.info("Začínám získávat futures data...")
@@ -137,31 +311,11 @@ def get_futures_data():
         
         # Získání futures symbolů
         logger.info("Získávám seznam futures symbolů...")
-        futures_exchange_info = None
+        symbols = get_futures_symbols_with_retry()
         
-        # Pokus o získání dat s opakováním
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                futures_exchange_info = client.futures_exchange_info()
-                break
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    logger.warning(f"Pokus {attempt+1} o získání futures_exchange_info selhal: {str(e)}. Zkouším znovu...")
-                    time.sleep(2)  # Pauza před dalším pokusem
-                else:
-                    logger.error(f"Všechny pokusy o získání futures_exchange_info selhaly: {str(e)}")
-                    return {'high_rsi': [], 'low_rsi': []}
-        
-        if not futures_exchange_info:
-            logger.error("Nepodařilo se získat informace o futures")
+        if not symbols:
+            logger.error("Nepodařilo se získat seznam symbolů, končím zpracování")
             return {'high_rsi': [], 'low_rsi': []}
-        
-        symbols = [s['symbol'] for s in futures_exchange_info['symbols'] 
-                  if s['status'] == 'TRADING' and s['contractType'] == 'PERPETUAL' and s['symbol'].endswith('USDT')]
-        
-        # Používáme všechny USDT páry - bez omezení
-        symbols = [s for s in symbols if 'USDT' in s]
         
         total_symbols = len(symbols)
         logger.info(f"Nalezeno {total_symbols} futures párů ke zpracování")
@@ -189,55 +343,20 @@ def get_futures_data():
                     processed += 1
                     logger.info(f"Zpracovávám {symbol} ({processed}/{total_symbols})")
                     
-                    # Získání dat s opakováním
-                    klines_1h = None
-                    klines_15m = None
-                    klines_1d = None
-                    
                     # Získání dat - 1h timeframe
-                    for attempt in range(3):
-                        try:
-                            klines_1h = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_1HOUR, limit=50)
-                            break
-                        except Exception as e:
-                            if attempt < 2:
-                                logger.warning(f"Pokus {attempt+1} o získání 1h dat pro {symbol} selhal: {str(e)}. Zkouším znovu...")
-                                time.sleep(1)
-                            else:
-                                logger.error(f"Všechny pokusy o získání 1h dat pro {symbol} selhaly")
-                    
+                    klines_1h = get_futures_data_with_retry(symbol, Client.KLINE_INTERVAL_1HOUR)
                     if not klines_1h:
                         logger.warning(f"Žádná 1h data pro {symbol}")
                         continue
                     
                     # Získání dat - 15m timeframe
-                    for attempt in range(3):
-                        try:
-                            klines_15m = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_15MINUTE, limit=50)
-                            break
-                        except Exception as e:
-                            if attempt < 2:
-                                logger.warning(f"Pokus {attempt+1} o získání 15m dat pro {symbol} selhal: {str(e)}. Zkouším znovu...")
-                                time.sleep(1)
-                            else:
-                                logger.error(f"Všechny pokusy o získání 15m dat pro {symbol} selhaly")
-                    
+                    klines_15m = get_futures_data_with_retry(symbol, Client.KLINE_INTERVAL_15MINUTE)
                     if not klines_15m:
                         logger.warning(f"Žádná 15m data pro {symbol}")
                         continue
                     
                     # Získání dat - 1d timeframe
-                    for attempt in range(3):
-                        try:
-                            klines_1d = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_1DAY, limit=50)
-                            break
-                        except Exception as e:
-                            if attempt < 2:
-                                logger.warning(f"Pokus {attempt+1} o získání 1d dat pro {symbol} selhal: {str(e)}. Zkouším znovu...")
-                                time.sleep(1)
-                            else:
-                                logger.error(f"Všechny pokusy o získání 1d dat pro {symbol} selhaly")
-                    
+                    klines_1d = get_futures_data_with_retry(symbol, Client.KLINE_INTERVAL_1DAY)
                     if not klines_1d:
                         logger.warning(f"Žádná 1d data pro {symbol}")
                         continue
@@ -411,12 +530,71 @@ def test_data():
     
     return jsonify(test_data)
 
+@app.route('/diagnostics')
+def diagnostics():
+    """
+    Diagnostická koncová cesta pro zjištění stavu serveru a připojení k Binance API
+    """
+    logger.info("Požadavek na diagnostická data")
+    
+    diagnostics_data = {
+        'server_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'python_version': sys.version,
+        'cache_status': {
+            'last_update': results_cache['last_update'],
+            'high_rsi_count': len(results_cache['high_rsi']),
+            'low_rsi_count': len(results_cache['low_rsi'])
+        },
+        'app_status': {
+            'running': running,
+            'data_version': data_version,
+            'thread_active': hasattr(app, 'background_thread_started') and app.background_thread_started
+        }
+    }
+    
+    # Test připojení k Binance API
+    binance_status = {'status': 'unknown', 'message': ''}
+    try:
+        # Zkusíme jednoduchou operaci
+        status = client.get_system_status()
+        binance_status = {
+            'status': 'ok',
+            'message': 'Připojení k Binance API je funkční',
+            'details': status
+        }
+        
+        # Zkusíme získat jeden pár pro test
+        try:
+            klines = client.futures_klines(symbol="BTCUSDT", interval=Client.KLINE_INTERVAL_1HOUR, limit=10)
+            binance_status['data_access'] = 'ok'
+            binance_status['data_sample'] = {'records': len(klines)} if klines else {'records': 0}
+        except Exception as e:
+            binance_status['data_access'] = 'failed'
+            binance_status['data_error'] = str(e)
+            
+    except Exception as e:
+        binance_status = {
+            'status': 'error',
+            'message': f'Problém s připojením k Binance API: {str(e)}'
+        }
+    
+    diagnostics_data['binance_api'] = binance_status
+    
+    return jsonify(diagnostics_data)
+
 @app.route('/sse')
 def sse():
-    def event_stream():
-        global data_version
-        client_version = 0
-        
+    return Response(event_stream(), mimetype="text/event-stream")
+
+def event_stream():
+    global data_version
+    client_version = 0
+    
+    # Vytvořím globální aplikační kontext pro použití v této funkci
+    app_context = app.app_context()
+    app_context.push()
+    
+    try:
         while True:
             # Pokud se změnila verze dat, pošleme aktualizaci
             if data_version > client_version:
@@ -428,17 +606,17 @@ def sse():
                     'last_update': results_cache['last_update'] if results_cache['last_update'] else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 }
                 
-                # Použití app_context pro jsonify
-                with app.app_context():
-                    json_data = jsonify(msg).get_data(as_text=True)
+                # Nyní jsme v aplikačním kontextu, takže jsonify bude fungovat
+                json_data = jsonify(msg).get_data(as_text=True)
                 
                 # Formát SSE: "data: {json}\n\n"
                 yield f"data: {json_data}\n\n"
             
             # Počkáme 1 sekundu před další kontrolou
             time.sleep(1)
-    
-    return Response(event_stream(), mimetype="text/event-stream")
+    finally:
+        # Uvolníme aplikační kontext při ukončení generátoru
+        app_context.pop()
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5002))
