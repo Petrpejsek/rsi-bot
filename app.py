@@ -584,42 +584,94 @@ def diagnostics():
 
 @app.route('/sse')
 def sse():
-    # Registrujeme funkci, která zajistí vytvoření nového kontextu pro každou odpověď
-    def generate():
-        # Vytvoříme nový aplikační kontext pro generátor
-        with app.app_context():
-            # Nyní můžeme použít globální data_version ve správném kontextu
-            global data_version
-            client_version = 0
-            
-            try:
-                while True:
-                    # Pokud se změnila verze dat, pošleme aktualizaci
-                    if data_version > client_version:
-                        client_version = data_version
-                        
-                        # Vytvoříme zprávu s aktuálním časem aktualizace
-                        msg = {
-                            'update_available': True,
-                            'last_update': results_cache['last_update'] if results_cache['last_update'] else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                        }
-                        
-                        # jsonify je nyní použito ve správném aplikačním kontextu
-                        json_data = jsonify(msg).get_data(as_text=True)
-                        
-                        # Formát SSE: "data: {json}\n\n"
-                        yield f"data: {json_data}\n\n"
+    """
+    Velmi zjednodušená implementace SSE - odstranění všech problémů s kontextem
+    """
+    def simple_stream():
+        last_version = 0
+        
+        # Jednoduchá zpráva při startu streamu
+        yield "data: {\"connected\": true}\n\n"
+        logger.info("SSE stream started")
+        
+        try:
+            while True:
+                # Jednoduché řešení bez problémů s kontextem
+                if data_version > last_version:
+                    last_version = data_version
+                    timestamp = results_cache['last_update'] if results_cache['last_update'] else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     
-                    # Počkáme 1 sekundu před další kontrolou
-                    time.sleep(1)
-            except GeneratorExit:
-                # Generátor byl ukončen
-                logger.info("SSE generátor byl ukončen")
+                    # Vytvoříme jednoduchý JSON string manuálně - bez jsonify
+                    json_str = f'{{\"update_available\": true, \"last_update\": \"{timestamp}\"}}'
+                    yield f"data: {json_str}\n\n"
+                    logger.info(f"SSE stream sent update, version: {last_version}")
+                
+                time.sleep(1)
+        except GeneratorExit:
+            logger.info("SSE stream closed")
+        except Exception as e:
+            logger.error(f"Error in SSE stream: {str(e)}")
+            yield f"data: {{\"error\": \"{str(e)}\"}}\n\n"
     
-    return Response(generate(), mimetype="text/event-stream")
+    response = Response(simple_stream(), mimetype="text/event-stream")
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['X-Accel-Buffering'] = 'no'  # Pro Nginx
+    return response
+
+# Přidáme metodu pro restart aplikace v případě potřeby
+@app.route('/restart')
+def restart_app():
+    """Jednoduchá cesta pro restart aplikace - může pomoci na Railway"""
+    logger.warning("Obdržen požadavek na restart aplikace")
+    global running
+    running = False
+    return jsonify({"status": "restart_requested"})
+
+@app.route('/railway-info')
+def railway_info():
+    """Diagnostické informace specifické pro Railway"""
+    logger.info("Požadavek na Railway informace")
+    
+    # Získáme informace o prostředí
+    env_info = {k: v for k, v in os.environ.items() if any(x in k.lower() for x in ['port', 'path', 'railway', 'host', 'url', 'env'])}
+    
+    # Informace o běhovém prostředí
+    runtime_info = {
+        'python_version': sys.version,
+        'platform': sys.platform,
+        'cwd': os.getcwd(),
+        'file_exists': {
+            'app.py': os.path.exists('app.py'),
+            '.env': os.path.exists('.env'),
+            'requirements.txt': os.path.exists('requirements.txt')
+        }
+    }
+    
+    # Návratová hodnota
+    return jsonify({
+        'environment': env_info,
+        'runtime': runtime_info,
+        'cache_status': {
+            'last_update': results_cache['last_update'],
+            'high_rsi_count': len(results_cache['high_rsi']),
+            'low_rsi_count': len(results_cache['low_rsi'])
+        },
+        'app_status': {
+            'running': running,
+            'data_version': data_version
+        }
+    })
 
 if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5002))
+    # Detekce prostředí a portu
+    is_railway = os.environ.get('RAILWAY_ENVIRONMENT') == 'production'
+    
+    # Pro Railway použijeme jejich proměnnou prostředí PORT
+    port = int(os.environ.get('PORT', 5002))
+    
+    # Log informací o prostředí
+    logger.info(f"Prostředí: {'Railway' if is_railway else 'Lokální'}")
+    logger.info(f"Port: {port}")
     
     # Nastartujeme background thread pro aktualizaci dat
     if not hasattr(app, 'background_thread_started') or not app.background_thread_started:
@@ -633,4 +685,19 @@ if __name__ == '__main__':
     werkzeug_logger = logging.getLogger('werkzeug')
     werkzeug_logger.setLevel(logging.WARNING)
     
-    app.run(host='0.0.0.0', port=port, debug=False, threaded=True) 
+    # Pokud jsme na Railway, použijeme host 0.0.0.0
+    host = '0.0.0.0'
+    
+    try:
+        logger.info(f"Spouštím aplikaci na {host}:{port}")
+        app.run(host=host, port=port, debug=False, threaded=True)
+    except Exception as e:
+        logger.error(f"Chyba při spuštění aplikace: {str(e)}")
+        # Pokud selže spuštění na portu 5002, zkusíme alternativní port
+        if not is_railway and "Address already in use" in str(e):
+            alt_port = 5003
+            logger.info(f"Zkouším alternativní port {alt_port}")
+            try:
+                app.run(host=host, port=alt_port, debug=False, threaded=True)
+            except Exception as e2:
+                logger.error(f"Chyba při spuštění aplikace na alternativním portu: {str(e2)}") 
