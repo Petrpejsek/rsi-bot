@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, Response
 from binance.client import Client
 import pandas as pd
 import numpy as np
@@ -69,6 +69,9 @@ except Exception as e:
 # Proměnná pro sledování běžícího stavu
 running = True
 
+# Proměnná pro sledování změn dat
+data_version = 0
+
 # Handler pro graceful shutdown
 def shutdown_handler(signum=None, frame=None):
     global running
@@ -126,6 +129,7 @@ def get_futures_data():
         logger.info("Začínám získávat futures data...")
         global results_cache  # Přidáno - globální proměnná musí být deklarována před použitím
         global running
+        global data_version
         
         high_rsi_results = []  # Pro RSI >= 55 (možný SHORT)
         low_rsi_results = []   # Pro RSI <= 28 (možný LONG)
@@ -307,6 +311,9 @@ def get_futures_data():
             results_cache['low_rsi'] = low_rsi_sorted
             results_cache['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
+            # Inkrementace verze dat pro SSE
+            data_version += 1
+            
             logger.info(f"Cache aktualizována po zpracování skupiny {batch_num}/{len(symbol_batches)} (celkem {processed}/{total_symbols} párů)")
             
             # Krátká pauza mezi skupinami, aby Railway neukončil proces
@@ -323,6 +330,9 @@ def get_futures_data():
         results_cache['high_rsi'] = high_rsi_sorted
         results_cache['low_rsi'] = low_rsi_sorted
         results_cache['last_update'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Inkrementace verze dat pro SSE při finální aktualizaci
+        data_version += 1
         
         return {
             'high_rsi': high_rsi_sorted,  # Pro SHORT
@@ -400,6 +410,35 @@ def test_data():
     }
     
     return jsonify(test_data)
+
+@app.route('/sse')
+def sse():
+    def event_stream():
+        global data_version
+        client_version = 0
+        
+        while True:
+            # Pokud se změnila verze dat, pošleme aktualizaci
+            if data_version > client_version:
+                client_version = data_version
+                
+                # Vytvoříme zprávu s aktuálním časem aktualizace
+                msg = {
+                    'update_available': True,
+                    'last_update': results_cache['last_update'] if results_cache['last_update'] else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+                
+                # Použití app_context pro jsonify
+                with app.app_context():
+                    json_data = jsonify(msg).get_data(as_text=True)
+                
+                # Formát SSE: "data: {json}\n\n"
+                yield f"data: {json_data}\n\n"
+            
+            # Počkáme 1 sekundu před další kontrolou
+            time.sleep(1)
+    
+    return Response(event_stream(), mimetype="text/event-stream")
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5002))

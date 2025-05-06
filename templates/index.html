@@ -151,6 +151,34 @@
         let connectionStatus = "connected";
         let retryTimeout = null;
         let dataLoadInProgress = false;
+        let eventSource = null; // Pro SSE
+        
+        // Připojení k SSE pro aktualizace v reálném čase
+        function setupSSE() {
+            if (eventSource) {
+                eventSource.close();
+            }
+            
+            eventSource = new EventSource('/sse');
+            
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                console.log('SSE aktualizace:', data);
+                
+                if (data.update_available) {
+                    console.log('K dispozici jsou nová data, načítám...');
+                    refreshData(false, true);
+                }
+            };
+            
+            eventSource.onerror = function(error) {
+                console.error('Chyba SSE připojení:', error);
+                eventSource.close();
+                
+                // Zkusíme znovu připojit po chvíli
+                setTimeout(setupSSE, 5000);
+            };
+        }
         
         function updateConnectionStatus(status) {
             const statusElement = document.getElementById('connectionStatus');
@@ -288,7 +316,7 @@
             }
         }
 
-        function refreshData(isRetry = false) {
+        function refreshData(isRetry = false, isSilent = false) {
             // Zabránit vícenásobnému načítání
             if (dataLoadInProgress) {
                 console.log("Již probíhá načítání dat, ignoruji požadavek.");
@@ -342,8 +370,10 @@
                     hideLoading();
                     dataLoadInProgress = false;
                     
-                    updateConnectionStatus("disconnected");
-                    retryFetchData();
+                    if (!isSilent) { // Nezobrazujeme chyby při tichém refreshi
+                        updateConnectionStatus("disconnected");
+                        retryFetchData();
+                    }
                 });
         }
 
@@ -384,8 +414,15 @@
         // Načtení dat při startu
         refreshData();
 
-        // Automatické obnovení každou minutu
-        setInterval(refreshData, 60000);
+        // Automatické obnovení každou minutu - necháme pro případ, že by SSE nefungovalo
+        setInterval(() => {
+            if (!dataLoadInProgress) {
+                refreshData(false, true); // Tichý refresh jako záloha
+            }
+        }, 60000);
+        
+        // Nastavení SSE pro aktualizace v reálném čase
+        setupSSE();
     </script>
 </body>
 </html>
