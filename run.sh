@@ -66,7 +66,12 @@ echo -e "${YELLOW}Pro ukončení stiskněte Ctrl+C${NC}"
 echo -e "${GREEN}Po spuštění bude aplikace dostupná na adrese: http://localhost:$PORT${NC}"
 
 # Spuštění aplikace s nastavením portu
-PORT=$PORT python3 -u app.py
+echo -e "${GREEN}Spouštím aplikaci s příkazem: PORT=$PORT python3 -u app.py${NC}"
+PORT=$PORT python3 -u app.py || {
+    echo -e "${RED}Aplikace skončila s chybou. Zkusím spustit znovu s debugovacím režimem.${NC}"
+    echo -e "${YELLOW}Pro ukončení stiskněte Ctrl+C${NC}"
+    PORT=$PORT FLASK_DEBUG=1 python3 -u app.py
+}
 
 # Tento kód se provede po ukončení aplikace (např. Ctrl+C)
 echo -e "${YELLOW}Aplikace byla ukončena.${NC}" 

@@ -584,39 +584,39 @@ def diagnostics():
 
 @app.route('/sse')
 def sse():
-    return Response(event_stream(), mimetype="text/event-stream")
-
-def event_stream():
-    global data_version
-    client_version = 0
-    
-    # Vytvořím globální aplikační kontext pro použití v této funkci
-    app_context = app.app_context()
-    app_context.push()
-    
-    try:
-        while True:
-            # Pokud se změnila verze dat, pošleme aktualizaci
-            if data_version > client_version:
-                client_version = data_version
-                
-                # Vytvoříme zprávu s aktuálním časem aktualizace
-                msg = {
-                    'update_available': True,
-                    'last_update': results_cache['last_update'] if results_cache['last_update'] else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                }
-                
-                # Nyní jsme v aplikačním kontextu, takže jsonify bude fungovat
-                json_data = jsonify(msg).get_data(as_text=True)
-                
-                # Formát SSE: "data: {json}\n\n"
-                yield f"data: {json_data}\n\n"
+    # Registrujeme funkci, která zajistí vytvoření nového kontextu pro každou odpověď
+    def generate():
+        # Vytvoříme nový aplikační kontext pro generátor
+        with app.app_context():
+            # Nyní můžeme použít globální data_version ve správném kontextu
+            global data_version
+            client_version = 0
             
-            # Počkáme 1 sekundu před další kontrolou
-            time.sleep(1)
-    finally:
-        # Uvolníme aplikační kontext při ukončení generátoru
-        app_context.pop()
+            try:
+                while True:
+                    # Pokud se změnila verze dat, pošleme aktualizaci
+                    if data_version > client_version:
+                        client_version = data_version
+                        
+                        # Vytvoříme zprávu s aktuálním časem aktualizace
+                        msg = {
+                            'update_available': True,
+                            'last_update': results_cache['last_update'] if results_cache['last_update'] else datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        }
+                        
+                        # jsonify je nyní použito ve správném aplikačním kontextu
+                        json_data = jsonify(msg).get_data(as_text=True)
+                        
+                        # Formát SSE: "data: {json}\n\n"
+                        yield f"data: {json_data}\n\n"
+                    
+                    # Počkáme 1 sekundu před další kontrolou
+                    time.sleep(1)
+            except GeneratorExit:
+                # Generátor byl ukončen
+                logger.info("SSE generátor byl ukončen")
+    
+    return Response(generate(), mimetype="text/event-stream")
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5002))
