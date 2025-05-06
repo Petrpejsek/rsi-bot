@@ -9,6 +9,8 @@ import logging
 import sys
 import time
 import threading
+import signal
+import atexit
 
 # Nastavení logování
 logging.basicConfig(
@@ -64,6 +66,25 @@ except Exception as e:
     logger.error(f"Chyba při připojení k Binance API: {str(e)}")
     sys.exit(1)
 
+# Proměnná pro sledování běžícího stavu
+running = True
+
+# Handler pro graceful shutdown
+def shutdown_handler(signum=None, frame=None):
+    global running
+    logger.info("Přijat signál pro ukončení, provádím graceful shutdown...")
+    running = False
+
+# Registrace signal handlerů
+signal.signal(signal.SIGINT, shutdown_handler)
+signal.signal(signal.SIGTERM, shutdown_handler)
+
+# Registrace funkce pro čistý exit
+def cleanup():
+    logger.info("Úklid aplikace před ukončením")
+
+atexit.register(cleanup)
+
 def calculate_rsi(data, periods=14):
     try:
         if len(data) < periods + 1:
@@ -104,13 +125,34 @@ def get_futures_data():
     try:
         logger.info("Začínám získávat futures data...")
         global results_cache  # Přidáno - globální proměnná musí být deklarována před použitím
+        global running
+        
         high_rsi_results = []  # Pro RSI >= 55 (možný SHORT)
         low_rsi_results = []   # Pro RSI <= 28 (možný LONG)
         processed = 0
         
         # Získání futures symbolů
         logger.info("Získávám seznam futures symbolů...")
-        futures_exchange_info = client.futures_exchange_info()
+        futures_exchange_info = None
+        
+        # Pokus o získání dat s opakováním
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                futures_exchange_info = client.futures_exchange_info()
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Pokus {attempt+1} o získání futures_exchange_info selhal: {str(e)}. Zkouším znovu...")
+                    time.sleep(2)  # Pauza před dalším pokusem
+                else:
+                    logger.error(f"Všechny pokusy o získání futures_exchange_info selhaly: {str(e)}")
+                    return {'high_rsi': [], 'low_rsi': []}
+        
+        if not futures_exchange_info:
+            logger.error("Nepodařilo se získat informace o futures")
+            return {'high_rsi': [], 'low_rsi': []}
+        
         symbols = [s['symbol'] for s in futures_exchange_info['symbols'] 
                   if s['status'] == 'TRADING' and s['contractType'] == 'PERPETUAL' and s['symbol'].endswith('USDT')]
         
@@ -126,28 +168,72 @@ def get_futures_data():
         batch_num = 0
         
         for batch in symbol_batches:
+            # Kontrola, zda nemáme ukončit aplikaci
+            if not running:
+                logger.info("Ukončuji zpracování futures dat - byl požadován shutdown")
+                break
+                
             batch_num += 1
             logger.info(f"Zpracovávám skupinu {batch_num}/{len(symbol_batches)} ({len(batch)} párů)")
             
             for symbol in batch:
+                # Kontrola, zda nemáme ukončit aplikaci
+                if not running:
+                    break
+                    
                 try:
                     processed += 1
                     logger.info(f"Zpracovávám {symbol} ({processed}/{total_symbols})")
                     
+                    # Získání dat s opakováním
+                    klines_1h = None
+                    klines_15m = None
+                    klines_1d = None
+                    
                     # Získání dat - 1h timeframe
-                    klines_1h = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_1HOUR, limit=50)
+                    for attempt in range(3):
+                        try:
+                            klines_1h = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_1HOUR, limit=50)
+                            break
+                        except Exception as e:
+                            if attempt < 2:
+                                logger.warning(f"Pokus {attempt+1} o získání 1h dat pro {symbol} selhal: {str(e)}. Zkouším znovu...")
+                                time.sleep(1)
+                            else:
+                                logger.error(f"Všechny pokusy o získání 1h dat pro {symbol} selhaly")
+                    
                     if not klines_1h:
                         logger.warning(f"Žádná 1h data pro {symbol}")
                         continue
                     
                     # Získání dat - 15m timeframe
-                    klines_15m = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_15MINUTE, limit=50)
+                    for attempt in range(3):
+                        try:
+                            klines_15m = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_15MINUTE, limit=50)
+                            break
+                        except Exception as e:
+                            if attempt < 2:
+                                logger.warning(f"Pokus {attempt+1} o získání 15m dat pro {symbol} selhal: {str(e)}. Zkouším znovu...")
+                                time.sleep(1)
+                            else:
+                                logger.error(f"Všechny pokusy o získání 15m dat pro {symbol} selhaly")
+                    
                     if not klines_15m:
                         logger.warning(f"Žádná 15m data pro {symbol}")
                         continue
                     
                     # Získání dat - 1d timeframe
-                    klines_1d = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_1DAY, limit=50)
+                    for attempt in range(3):
+                        try:
+                            klines_1d = client.futures_klines(symbol=symbol, interval=Client.KLINE_INTERVAL_1DAY, limit=50)
+                            break
+                        except Exception as e:
+                            if attempt < 2:
+                                logger.warning(f"Pokus {attempt+1} o získání 1d dat pro {symbol} selhal: {str(e)}. Zkouším znovu...")
+                                time.sleep(1)
+                            else:
+                                logger.error(f"Všechny pokusy o získání 1d dat pro {symbol} selhaly")
+                    
                     if not klines_1d:
                         logger.warning(f"Žádná 1d data pro {symbol}")
                         continue
@@ -249,12 +335,21 @@ def get_futures_data():
 # Funkce pro spuštění na pozadí
 def background_update():
     global results_cache  # Přidáno - globální proměnná musí být deklarována před použitím
-    while True:
+    global running
+    
+    while running:
         try:
             logger.info("Spouštím aktualizaci dat na pozadí")
             get_futures_data()
             logger.info("Aktualizace dat dokončena, čekám 60 sekund")
-            time.sleep(60)  # Aktualizace každou minutu
+            
+            # Kontrolujeme stav běhu každých 5 sekund
+            for _ in range(12):  # 12 x 5 sekund = 60 sekund
+                if not running:
+                    logger.info("Ukončuji background thread")
+                    break
+                time.sleep(5)
+                
         except Exception as e:
             logger.error(f"Chyba při aktualizaci na pozadí: {str(e)}")
             time.sleep(60)  # I v případě chyby počkáme minutu
@@ -317,4 +412,8 @@ if __name__ == '__main__':
         background_thread.start()
         app.background_thread_started = True
     
-    app.run(host='0.0.0.0', port=port, debug=False) 
+    # Nastavit Werkzeug logger na WARNING, abychom omezili výpisy
+    werkzeug_logger = logging.getLogger('werkzeug')
+    werkzeug_logger.setLevel(logging.WARNING)
+    
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True) 

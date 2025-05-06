@@ -52,6 +52,27 @@
         .long-badge {
             background-color: #198754;
         }
+        .connection-status {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            z-index: 1000;
+        }
+        .status-connected {
+            background-color: #198754;
+            color: white;
+        }
+        .status-disconnected {
+            background-color: #dc3545;
+            color: white;
+        }
+        .status-reconnecting {
+            background-color: #ffc107;
+            color: black;
+        }
     </style>
 </head>
 <body>
@@ -118,7 +139,35 @@
         </div>
     </div>
 
+    <div id="connectionStatus" class="connection-status status-connected">
+        Připojeno
+    </div>
+
     <script>
+        // Globální proměnné
+        let retryCount = 0;
+        let maxRetries = 5;
+        let retryDelay = 5000; // 5 sekund
+        let connectionStatus = "connected";
+        let retryTimeout = null;
+        let dataLoadInProgress = false;
+        
+        function updateConnectionStatus(status) {
+            const statusElement = document.getElementById('connectionStatus');
+            connectionStatus = status;
+            
+            if (status === "connected") {
+                statusElement.className = "connection-status status-connected";
+                statusElement.innerText = "Připojeno";
+            } else if (status === "disconnected") {
+                statusElement.className = "connection-status status-disconnected";
+                statusElement.innerText = "Odpojeno - automaticky zkusím znovu";
+            } else if (status === "reconnecting") {
+                statusElement.className = "connection-status status-reconnecting";
+                statusElement.innerText = `Pokus o připojení ${retryCount}/${maxRetries}`;
+            }
+        }
+        
         function showLoading() {
             document.getElementById('loading').style.display = 'block';
         }
@@ -213,13 +262,58 @@
             }
             
             console.log("Aktualizace tabulek dokončena");
+            updateConnectionStatus("connected");
+        }
+        
+        function retryFetchData() {
+            if (retryCount < maxRetries) {
+                retryCount++;
+                const waitTime = retryDelay * retryCount;
+                
+                updateConnectionStatus("reconnecting");
+                console.log(`Pokus ${retryCount}/${maxRetries} - čekám ${waitTime/1000} sekund...`);
+                
+                retryTimeout = setTimeout(() => {
+                    refreshData(true);
+                }, waitTime);
+            } else {
+                console.error("Vyčerpán maximální počet pokusů o připojení.");
+                updateConnectionStatus("disconnected");
+                
+                // Reset počítadla pokusů a zkusíme za delší dobu
+                retryCount = 0;
+                retryTimeout = setTimeout(() => {
+                    refreshData(true);
+                }, 30000); // Zkusit znovu za 30 sekund
+            }
         }
 
-        function refreshData() {
-            showLoading();
+        function refreshData(isRetry = false) {
+            // Zabránit vícenásobnému načítání
+            if (dataLoadInProgress) {
+                console.log("Již probíhá načítání dat, ignoruji požadavek.");
+                return;
+            }
+            
+            dataLoadInProgress = true;
+            
+            if (!isRetry) {
+                showLoading();
+                // Reset počítadla pokusů při manuálním refreshi
+                retryCount = 0;
+                
+                // Zrušit případný probíhající timeout
+                if (retryTimeout) {
+                    clearTimeout(retryTimeout);
+                    retryTimeout = null;
+                }
+            }
+            
             console.log("Začínám načítat data z API...");
             // Přidáme náhodný parametr k URL, aby browser nepoužil cache
-            fetch('/get_rsi_data?t=' + new Date().getTime())
+            fetch('/get_rsi_data?t=' + new Date().getTime(), { 
+                signal: AbortSignal.timeout(10000) // Timeout po 10 sekundách
+            })
                 .then(response => {
                     console.log("Odpověď z API:", response);
                     if (!response.ok) {
@@ -233,15 +327,23 @@
                     if (!data) {
                         throw new Error('Žádná data nebyla přijata');
                     }
+                    
+                    // Úspěšné načtení - resetujeme počítadlo pokusů
+                    retryCount = 0;
+                    
                     console.log("High RSI data délka:", data.high_rsi ? data.high_rsi.length : 0);
                     console.log("Low RSI data délka:", data.low_rsi ? data.low_rsi.length : 0);
                     updateTables(data);
                     hideLoading();
+                    dataLoadInProgress = false;
                 })
                 .catch(error => {
                     console.error('Error:', error);
                     hideLoading();
-                    alert('Chyba při načítání dat: ' + error.message + '\nZkuste to znovu za chvíli.');
+                    dataLoadInProgress = false;
+                    
+                    updateConnectionStatus("disconnected");
+                    retryFetchData();
                 });
         }
 
@@ -257,13 +359,27 @@
                     console.log("Získaná testovací data:", data);
                     updateTables(data);
                     hideLoading();
+                    updateConnectionStatus("connected");
                 })
                 .catch(error => {
                     console.error('Error při načítání testovacích dat:', error);
                     hideLoading();
                     alert('Chyba při načítání testovacích dat.');
+                    updateConnectionStatus("disconnected");
                 });
         }
+
+        // Detekce stavu online/offline
+        window.addEventListener('online', () => {
+            console.log('Připojení k internetu je znovu aktivní');
+            updateConnectionStatus("reconnecting");
+            refreshData(true);
+        });
+        
+        window.addEventListener('offline', () => {
+            console.log('Připojení k internetu bylo ztraceno');
+            updateConnectionStatus("disconnected");
+        });
 
         // Načtení dat při startu
         refreshData();
