@@ -48,6 +48,9 @@ results_cache = {
     'last_update': None
 }
 
+# Globální slovník pro ukládání předchozích hodnot RSI pro každý symbol
+previous_rsi_values = {}
+
 # Kontrola API klíčů
 api_key = os.getenv('BINANCE_API_KEY')
 api_secret = os.getenv('BINANCE_API_SECRET')
@@ -298,12 +301,47 @@ def get_futures_symbols_with_retry(max_retries=7, initial_delay=1):
     logger.error("Nepodařilo se získat futures symboly žádným způsobem")
     return ["BTCUSDT", "ETHUSDT"]  # Vrátíme alespoň základní páry
 
+# Funkce pro určení trendu RSI
+def determine_trend(symbol, current_rsi, timeframe="1h"):
+    """
+    Určí trend RSI pro daný symbol porovnáním s předchozí hodnotou
+    
+    Args:
+        symbol: Symbol (např. BTCUSDT)
+        current_rsi: Aktuální hodnota RSI
+        timeframe: Časový rámec (1h, 15m, 1d)
+    
+    Returns:
+        String: "up", "down", "stable" nebo None pokud nemáme předchozí hodnotu
+    """
+    key = f"{symbol}_{timeframe}"
+    
+    if key not in previous_rsi_values:
+        # Pro první spuštění nemáme předchozí hodnotu
+        previous_rsi_values[key] = current_rsi
+        return None
+    
+    previous_rsi = previous_rsi_values[key]
+    
+    # Aktualizujeme hodnotu pro příští běh
+    previous_rsi_values[key] = current_rsi
+    
+    # Určíme trend (použijeme malý práh 0.5 pro stabilitu)
+    if current_rsi > previous_rsi + 0.5:
+        return "up"
+    elif current_rsi < previous_rsi - 0.5:
+        return "down"
+    else:
+        return "stable"
+
 def get_futures_data():
     try:
         logger.info("Začínám získávat futures data...")
-        global results_cache  # Přidáno - globální proměnná musí být deklarována před použitím
+        # Správné pořadí globálních proměnných
         global running
         global data_version
+        global results_cache
+        global previous_rsi_values  # Pro ukládání předchozích RSI hodnot
         
         high_rsi_results = []  # Pro RSI >= 55 (možný SHORT)
         low_rsi_results = []   # Pro RSI <= 28 (možný LONG)
@@ -395,22 +433,40 @@ def get_futures_data():
                     
                     # Kontrola podmínek pro RSI (pouze podle 1h timeframe)
                     if rsi_1h >= 55:  # Signál pro možný SHORT
-                        logger.info(f"✓ Nalezen {symbol} s RSI 1h {rsi_1h:.2f}, 15m {rsi_15m:.2f}, 1d {rsi_1d:.2f} (možný SHORT)")
+                        # Určení trendu pro všechny časové rámce
+                        trend_1h = determine_trend(symbol, rsi_1h, "1h")
+                        trend_15m = determine_trend(symbol, rsi_15m, "15m") 
+                        trend_1d = determine_trend(symbol, rsi_1d, "1d")
+                        
+                        logger.info(f"✓ Nalezen {symbol} s RSI 1h {rsi_1h:.2f} ({trend_1h or 'initial'}), 15m {rsi_15m:.2f} ({trend_15m or 'initial'}), 1d {rsi_1d:.2f} ({trend_1d or 'initial'}) (možný SHORT)")
+                        
                         high_rsi_results.append({
                             'symbol': symbol,
                             'rsi': round(rsi_1h, 2),
                             'rsi_15m': round(rsi_15m, 2),
                             'rsi_1d': round(rsi_1d, 2),
-                            'price': f"${current_price:.4f}"
+                            'price': f"${current_price:.4f}",
+                            'trend': trend_1h or "stable",  # Trend pro 1h timeframe
+                            'trend_15m': trend_15m or "stable",  # Trend pro 15m timeframe
+                            'trend_1d': trend_1d or "stable"  # Trend pro 1d timeframe
                         })
                     elif rsi_1h <= 28:  # Signál pro možný LONG
-                        logger.info(f"✓ Nalezen {symbol} s RSI 1h {rsi_1h:.2f}, 15m {rsi_15m:.2f}, 1d {rsi_1d:.2f} (možný LONG)")
+                        # Určení trendu pro všechny časové rámce
+                        trend_1h = determine_trend(symbol, rsi_1h, "1h")
+                        trend_15m = determine_trend(symbol, rsi_15m, "15m") 
+                        trend_1d = determine_trend(symbol, rsi_1d, "1d")
+                        
+                        logger.info(f"✓ Nalezen {symbol} s RSI 1h {rsi_1h:.2f} ({trend_1h or 'initial'}), 15m {rsi_15m:.2f} ({trend_15m or 'initial'}), 1d {rsi_1d:.2f} ({trend_1d or 'initial'}) (možný LONG)")
+                        
                         low_rsi_results.append({
                             'symbol': symbol,
                             'rsi': round(rsi_1h, 2),
                             'rsi_15m': round(rsi_15m, 2),
                             'rsi_1d': round(rsi_1d, 2),
-                            'price': f"${current_price:.4f}"
+                            'price': f"${current_price:.4f}",
+                            'trend': trend_1h or "stable",  # Trend pro 1h timeframe
+                            'trend_15m': trend_15m or "stable",  # Trend pro 15m timeframe
+                            'trend_1d': trend_1d or "stable"  # Trend pro 1d timeframe
                         })
                     
                     # Kratší pauza mezi API calls
@@ -517,13 +573,13 @@ def test_data():
     # Vrátíme statická testovací data
     test_data = {
         'high_rsi': [
-            {'symbol': 'BTCUSDT', 'rsi': 75.25, 'rsi_15m': 68.42, 'rsi_1d': 72.33, 'price': '$65,432.10'},
-            {'symbol': 'ETHUSDT', 'rsi': 72.18, 'rsi_15m': 55.67, 'rsi_1d': 60.42, 'price': '$3,245.67'},
-            {'symbol': 'ADAUSDT', 'rsi': 68.42, 'rsi_15m': 62.33, 'rsi_1d': 65.78, 'price': '$0.5678'}
+            {'symbol': 'BTCUSDT', 'rsi': 75.25, 'rsi_15m': 68.42, 'rsi_1d': 72.33, 'price': '$65,432.10', 'trend': 'up', 'trend_15m': 'down', 'trend_1d': 'stable'},
+            {'symbol': 'ETHUSDT', 'rsi': 72.18, 'rsi_15m': 55.67, 'rsi_1d': 60.42, 'price': '$3,245.67', 'trend': 'down', 'trend_15m': 'up', 'trend_1d': 'up'},
+            {'symbol': 'ADAUSDT', 'rsi': 68.42, 'rsi_15m': 62.33, 'rsi_1d': 65.78, 'price': '$0.5678', 'trend': 'stable', 'trend_15m': 'up', 'trend_1d': 'down'}
         ],
         'low_rsi': [
-            {'symbol': 'XRPUSDT', 'rsi': 26.75, 'rsi_15m': 31.48, 'rsi_1d': 28.72, 'price': '$0.4321'},
-            {'symbol': 'DOGEUSDT', 'rsi': 22.33, 'rsi_15m': 24.72, 'rsi_1d': 25.48, 'price': '$0.1234'}
+            {'symbol': 'XRPUSDT', 'rsi': 26.75, 'rsi_15m': 31.48, 'rsi_1d': 28.72, 'price': '$0.4321', 'trend': 'down', 'trend_15m': 'down', 'trend_1d': 'stable'},
+            {'symbol': 'DOGEUSDT', 'rsi': 22.33, 'rsi_15m': 24.72, 'rsi_1d': 25.48, 'price': '$0.1234', 'trend': 'up', 'trend_15m': 'stable', 'trend_1d': 'down'}
         ],
         'last_update': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
@@ -537,9 +593,31 @@ def diagnostics():
     """
     logger.info("Požadavek na diagnostická data")
     
-    diagnostics_data = {
-        'server_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+    # Získáme informace o prostředí
+    env_info = {k: v for k, v in os.environ.items() if any(x in k.lower() for x in ['port', 'path', 'railway', 'host', 'url', 'env'])}
+    
+    # Informace o běhovém prostředí
+    runtime_info = {
         'python_version': sys.version,
+        'platform': sys.platform,
+        'cwd': os.getcwd(),
+        'file_exists': {
+            'app.py': os.path.exists('app.py'),
+            '.env': os.path.exists('.env'),
+            'requirements.txt': os.path.exists('requirements.txt')
+        }
+    }
+    
+    # Informace o trendech
+    trend_info = {
+        'tracked_pairs': len(previous_rsi_values),
+        'samples': {k: v for k, v in list(previous_rsi_values.items())[:5]} if previous_rsi_values else {}
+    }
+    
+    # Návratová hodnota
+    return jsonify({
+        'environment': env_info,
+        'runtime': runtime_info,
         'cache_status': {
             'last_update': results_cache['last_update'],
             'high_rsi_count': len(results_cache['high_rsi']),
@@ -547,40 +625,10 @@ def diagnostics():
         },
         'app_status': {
             'running': running,
-            'data_version': data_version,
-            'thread_active': hasattr(app, 'background_thread_started') and app.background_thread_started
-        }
-    }
-    
-    # Test připojení k Binance API
-    binance_status = {'status': 'unknown', 'message': ''}
-    try:
-        # Zkusíme jednoduchou operaci
-        status = client.get_system_status()
-        binance_status = {
-            'status': 'ok',
-            'message': 'Připojení k Binance API je funkční',
-            'details': status
-        }
-        
-        # Zkusíme získat jeden pár pro test
-        try:
-            klines = client.futures_klines(symbol="BTCUSDT", interval=Client.KLINE_INTERVAL_1HOUR, limit=10)
-            binance_status['data_access'] = 'ok'
-            binance_status['data_sample'] = {'records': len(klines)} if klines else {'records': 0}
-        except Exception as e:
-            binance_status['data_access'] = 'failed'
-            binance_status['data_error'] = str(e)
-            
-    except Exception as e:
-        binance_status = {
-            'status': 'error',
-            'message': f'Problém s připojením k Binance API: {str(e)}'
-        }
-    
-    diagnostics_data['binance_api'] = binance_status
-    
-    return jsonify(diagnostics_data)
+            'data_version': data_version
+        },
+        'trends': trend_info
+    })
 
 @app.route('/sse')
 def sse():
@@ -593,6 +641,10 @@ def sse():
         # Jednoduchá zpráva při startu streamu
         yield "data: {\"connected\": true}\n\n"
         logger.info("SSE stream started")
+        
+        # Uchováváme si aplikační kontext
+        app_ctx = app.app_context()
+        app_ctx.push()
         
         try:
             while True:
@@ -609,9 +661,11 @@ def sse():
                 time.sleep(1)
         except GeneratorExit:
             logger.info("SSE stream closed")
+            app_ctx.pop()  # Ukončení kontextu
         except Exception as e:
             logger.error(f"Error in SSE stream: {str(e)}")
             yield f"data: {{\"error\": \"{str(e)}\"}}\n\n"
+            app_ctx.pop()  # Ukončení kontextu i při chybě
     
     response = Response(simple_stream(), mimetype="text/event-stream")
     response.headers['Cache-Control'] = 'no-cache'

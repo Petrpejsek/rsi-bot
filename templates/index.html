@@ -73,6 +73,18 @@
             background-color: #ffc107;
             color: black;
         }
+        .trend-up {
+            color: #198754;
+            margin-left: 4px;
+        }
+        .trend-down {
+            color: #dc3545;
+            margin-left: 4px;
+        }
+        .trend-stable {
+            color: #6c757d;
+            margin-left: 4px;
+        }
     </style>
 </head>
 <body>
@@ -152,6 +164,21 @@
         let retryTimeout = null;
         let dataLoadInProgress = false;
         let eventSource = null; // Pro SSE
+        
+        // Funkce pro generování HTML šipek na základě trendu
+        function getTrendArrow(trend) {
+            if (!trend) return '';
+            
+            if (trend === 'up') {
+                return '<span class="trend-up">▲</span>';
+            } else if (trend === 'down') {
+                return '<span class="trend-down">▼</span>';
+            } else if (trend === 'stable') {
+                return '<span class="trend-stable">■</span>';
+            }
+            
+            return '';
+        }
         
         // Připojení k SSE pro aktualizace v reálném čase
         function setupSSE() {
@@ -234,9 +261,9 @@
                     const row = document.createElement('tr');
                     row.innerHTML = `
                         <td>${item.symbol}</td>
-                        <td>${item.rsi}</td>
-                        <td>${item.rsi_15m || '-'}</td>
-                        <td>${item.rsi_1d || '-'}</td>
+                        <td>${item.rsi}${getTrendArrow(item.trend)}</td>
+                        <td>${item.rsi_15m || '-'}${getTrendArrow(item.trend_15m)}</td>
+                        <td>${item.rsi_1d || '-'}${getTrendArrow(item.trend_1d)}</td>
                         <td>${item.price}</td>
                     `;
                     highRsiBody.appendChild(row);
@@ -265,9 +292,9 @@
                     const row = document.createElement('tr');
                     row.innerHTML = `
                         <td>${item.symbol}</td>
-                        <td>${item.rsi}</td>
-                        <td>${item.rsi_15m || '-'}</td>
-                        <td>${item.rsi_1d || '-'}</td>
+                        <td>${item.rsi}${getTrendArrow(item.trend)}</td>
+                        <td>${item.rsi_15m || '-'}${getTrendArrow(item.trend_15m)}</td>
+                        <td>${item.rsi_1d || '-'}${getTrendArrow(item.trend_1d)}</td>
                         <td>${item.price}</td>
                     `;
                     lowRsiBody.appendChild(row);
